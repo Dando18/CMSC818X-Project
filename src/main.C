@@ -72,6 +72,9 @@ int main(int argc, char **argv) {
  */
 graph_t *getGraph(std::string const& filename) {
 
+    /* [TODO] -- use ReadGraph and partition with MPI
+                 or use ParMETIS */
+
     return static_cast<graph_t *>(nullptr);
 }
 
@@ -80,6 +83,11 @@ graph_t *getGraph(std::string const& filename) {
  * @param[in,out] graph the graph to be colored
  */
 void colorGraph(graph_t *graph) {
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size):
+
+    /* [TODO] --implement graph algorithm */
 
 }
 
@@ -88,5 +96,8 @@ void colorGraph(graph_t *graph) {
  * @param[in] out the stream to output coloring info into
  */
 void outputColoring(graph_t *graph, std::ostream &out) {
+
+    /* [TODO] -- find a good way to output coloring so we can
+                 check against other colorings */
 
 }
