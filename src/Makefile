@@ -1,6 +1,6 @@
 CC = gcc
 MPICC = mpicxx
-WARNINGS = -Wall -pedantic -Wno-unused-variable
+WARNINGS = -Wall -pedantic -Wno-unused-variable -g
 STD = -std=c++11
 OPT = -O3
 FLAGS = $(WARNINGS) $(STD) $(OPT)
