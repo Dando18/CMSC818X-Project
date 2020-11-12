@@ -27,15 +27,21 @@
 
 constexpr std::size_t MAX_COLOR = 1000;
 
+struct coloring_stats_t {
+    std::size_t numIterations;
+};
+
 /* forward declare functions */
 graph_t *getGraph(std::string const& filename);
 graph_t *tmpGetGraph();
-void colorGraph(graph_t *graph, std::size_t s);
+void deleteGraph(graph_t *graph);
+void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out);
 void colorGraphSerial(std::vector<idx_t> const& U, graph_t *graph, std::vector<idx_t> const& boundaryColors);
 void colorGraphSerialTest(std::vector<idx_t> const& U, graph_t *graph, int loop, int rank);
 std::vector<std::vector<idx_t>> partitionU(std::vector<idx_t> const& U, std::size_t s);
-void getBoundaryVertices(graph_t *graph, std::vector<idx_t> const& U);
+idx_t numColorsUsed(graph_t *graph);
 void outputColoring(graph_t *graph, std::ostream &out);
+
 
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
@@ -53,8 +59,9 @@ int main(int argc, char **argv) {
     graph_t *graph = getGraph(fileName);
 
     /* color graph in parallel */
+    coloring_stats_t stats;
     double start = MPI_Wtime();
-    colorGraph(graph, chunkSize);
+    colorGraph(graph, chunkSize, stats);
     double end = MPI_Wtime();
 
     /* output coloring to file or stdout */ 
@@ -68,14 +75,19 @@ int main(int argc, char **argv) {
     MPI_Reduce(&duration, &maxDuration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
     avgDuration /= static_cast<double>(size);
 
+    int totalColors = numColorsUsed(graph);
+
     if (rank == 0) {
-        std::cout << "Rank 0 Duration:  " << duration    << "\n"
-                  << "Min Duration:     " << minDuration << "\n"
-                  << "Max Duration:     " << maxDuration << "\n"
-                  << "Average Duration: " << avgDuration << "\n";
+        std::cout << "Rank 0 Duration:  " << duration            << "\n"
+                  << "Min Duration:     " << minDuration         << "\n"
+                  << "Max Duration:     " << maxDuration         << "\n"
+                  << "Average Duration: " << avgDuration         << "\n"
+                  << "Colors Used:      " << totalColors         << "\n"
+                  << "Num Iterations    " << stats.numIterations << "\n";
     }
 
     /* clean up */
+    deleteGraph(graph);
     delete graph;
 
     MPI_Finalize();
@@ -155,11 +167,18 @@ graph_t *tmpGetGraph() {
     return graph;
 }
 
+void deleteGraph(graph_t *graph) {
+    delete graph->vwgt;
+    delete graph->adjncy;
+    delete graph->adjwgt;
+    delete graph->xadj;
+}
+
 
 /** Does parallel graph coloring.
  * @param[in,out] graph the graph to be colored
  */
-void colorGraph(graph_t *graph, std::size_t s) {
+void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
     int rank, size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
@@ -203,7 +222,7 @@ void colorGraph(graph_t *graph, std::size_t s) {
             std::cout << std::endl;
 
             // Supersteps -- color each subset of U
-            for (idx_t k = 0; k < Us.size(); k++) {     // (8)
+            for (size_t k = 0; k < Us.size(); k++) {     // (8)
                 std::copy(graph->vwgt + 0, graph->vwgt + graph->nvtxs, previousColors.begin());
                 colorGraphSerial(Us.at(k), graph, boundaryColors); // (9-10)
                 //colorGraphSerialTest(Us.at(k), graph, loop, rank); // (9-10)
@@ -236,7 +255,7 @@ void colorGraph(graph_t *graph, std::size_t s) {
             }   // end of superstep
                 
             MPI_Waitall(requests.size(), requests.data(), MPI_STATUS_IGNORE);
-            for (int i = 0; i < 3 * requests.size(); i = i + 3) {
+            for (size_t i = 0; i < 3 * requests.size(); i = i + 3) {
                 idx_t neighborIdx = recv_buf[i];
                 idx_t neighborColor = recv_buf[i + 1];
                 idx_t myIdx = recv_buf[i + 2]; 
@@ -301,6 +320,8 @@ void colorGraph(graph_t *graph, std::size_t s) {
         loop++;
         //if (loop > 3) max_size_U = 0;
     }   // end of while loop
+
+    out.numIterations = loop;
 }
 
 
@@ -314,7 +335,7 @@ void colorGraphSerial(std::vector<idx_t> const& U, graph_t *graph, std::vector<i
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     
     std::array<bool, MAX_COLOR> neighbor_colors;
-    for (int i = 0; i < U.size(); i++) {
+    for (size_t i = 0; i < U.size(); i++) {
 
         idx_t vertex = U.at(i);
         std::fill(neighbor_colors.begin(), neighbor_colors.end(), false);
@@ -363,8 +384,13 @@ std::vector<std::vector<idx_t>> partitionU(std::vector<idx_t> const& U, std::siz
     return Us;
 }
 
-void getBoundaryVertices(graph_t *graph, std::vector<idx_t> const& U) {
-    
+idx_t numColorsUsed(graph_t *graph) {
+    int localMaxColor = *std::max_element(graph->vwgt, graph->vwgt + graph->nvtxs);
+
+    int maxColor = -1;
+    MPI_Reduce(&localMaxColor, &maxColor, 1, MPI_INT, MPI_MAX, 0, MPI_COMM_WORLD);
+
+    return maxColor + 1;
 }
 
 /** Outputs the coloring info of a graph into a stream.
