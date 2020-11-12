@@ -17,6 +17,7 @@
 #include <ostream>
 #include <map>
 #include <algorithm>
+#include <cstdio>
 
 // 3rd party libs
 #include "mpi.h"
@@ -31,7 +32,7 @@ graph_t *tmpGetGraph();
 void colorGraph(graph_t *graph, std::size_t s);
 void colorGraphSerial(std::vector<idx_t> const& U, graph_t *graph);
 std::vector<std::vector<idx_t>> partitionU(std::vector<idx_t> const& U, std::size_t s);
-std::map<int, std::vector<std::tuple<int, int, int>>> getBoundaryVertices(graph_t *graph, std::vector<idx_t> const& U);
+void getBoundaryVertices(graph_t *graph, std::vector<idx_t> const& U);
 void outputColoring(graph_t *graph, std::ostream &out);
 
 int main(int argc, char **argv) {
@@ -66,11 +67,10 @@ int main(int argc, char **argv) {
     avgDuration /= static_cast<double>(size);
 
     if (rank == 0) {
-        std::cout << "Rank 0 Duration:  " << duration
-                  << "Min Duration:     " << minDuration
-                  << "Max Duration:     " << maxDuration
-                  << "Average Duration: " << avgDuration
-                  << "\n";
+        std::cout << "Rank 0 Duration:  " << duration    << "\n"
+                  << "Min Duration:     " << minDuration << "\n"
+                  << "Max Duration:     " << maxDuration << "\n"
+                  << "Average Duration: " << avgDuration << "\n";
     }
 
     /* clean up */
@@ -110,8 +110,9 @@ graph_t *tmpGetGraph() {
 
     graph_t *graph = new graph_t;
     constexpr idx_t NVERTS = 5;
-    graph->nvtxs = 5;
-    graph->vwgt = new idx_t[5];
+    graph->nvtxs = NVERTS;
+    graph->vwgt = new idx_t[NVERTS];
+    std::fill(graph->vwgt + 0, graph->vwgt + NVERTS, 0);
 
 
     if (rank == 0) {
@@ -168,62 +169,101 @@ void colorGraph(graph_t *graph, std::size_t s) {
     int size_U = U.size();
     int max_size_U = 1;
     while (max_size_U != 0) {   // (5)
-        std::map<int, std::vector<std::tuple<int, int>>> boundary_vertices_for_other_ranks;
-        std::map<int, std::vector<std::tuple<int, int>>> boundary_vertices_from_other_ranks;
-        std::map<int, std::vector<std::tuple<MPI_Request, MPI_Request>>> send_requests;
-        std::map<int, std::vector<std::tuple<MPI_Request, MPI_Request>>> recv_requests;
+        
         if (size_U != 0) {      // (6)
             // Partition U into subsets
             std::vector<std::vector<idx_t>> Us = partitionU(U, s);
-
+        
             // Supersteps -- color each subset of U
-            for (idx_t k = 0; k < graph->nvtxs / s; k++) {     // (8)
+            for (idx_t k = 0; k < Us.size(); k++) {     // (8)
                 colorGraphSerial(Us.at(k), graph); // (9-10)
+
+                printf("[%d] Us[%d].size() = %lu\n", rank, k, Us.at(k).size());
 
                 // Communicate with other processors
                 // 1. find all boundary vertices
-                std::vector<idx_t> boundaryColors (graph->nedges);
+                std::vector<idx_t> boundaryColors (graph->nedges, -1);
+                std::vector<MPI_Request> requests;
+                int num_external_edges = 0;
+                
+                // count all of graph->adjwgt != rank
+                for (idx_t i = 0; i < graph->nedges; i++) {
+                    num_external_edges += (graph->adjwgt[i] != rank) ? 1 : 0;
+                }
+
+                idx_t *recv_buf = new idx_t[3 * num_external_edges];
+                std::fill(recv_buf + 0, recv_buf + (3*num_external_edges), -1);
+                idx_t *send_buf = new idx_t[3 * num_external_edges];
+                int counter = 0;
+                requests.reserve(num_external_edges);
                 for (idx_t i : Us.at(k)) {
+                    idx_t myColor = graph->vwgt[i];
+
+                    printf("examining vertex %d on %d\n", i, rank);
+
                     for (int j = graph->xadj[i]; j < graph->xadj[i+1]; j++) {    // for every edge
                         idx_t neighborIdx = graph->adjncy[j];   // this is their local index
                         idx_t neighborRank = graph->adjwgt[j];
 
                         if (neighborRank != rank) { // is a boundary vertex
-                            
-                            
 
-                            std::tuple<int, int> f = std::make_tuple(i, graph->vwgt[i]);
-                            boundary_vertices_for_other_ranks.at(neighborRank).push_back(f);
+                            send_buf[counter] = i; send_buf[counter + 1] = myColor; send_buf[counter + 2] = neighborIdx;
+                        
+                            MPI_Request recvRequest, sendRequest;
+                            MPI_Isend(&(send_buf[counter]), 3, MPI_INT, neighborRank, 0, MPI_COMM_WORLD, &sendRequest);
 
-                            MPI_Request send_request1, send_request2;
-                            std::tuple<int, int> f = std::make_tuple(send_request1, send_request2)
-                            send_requests.at(neighborRank).push_back(f);
-                            MPI_Isend(boundary_vertices_for_other_ranks.at(neighborRank).at(0), 1, MPI_INT, 
-                                neighborRank, tag, MPI_COMM_WORLD, send_requests.at(neighborRank).back().at(0));
-                            MPI_Isend(boundary_vertices_for_other_ranks.at(neighborRank).at(1), 1, MPI_INT, 
-                                neighborRank, tag, MPI_COMM_WORLD, send_requests.at(neighborRank).back().at(1));
+                            printf("%d sent (%d, %d, %d) to %d\n", rank, i, myColor, neighborIdx, neighborRank);
+                            fflush(stdout);
                             
-                            MPI_Request recv_request1, recv_request2;
-                            std::tuple<int, int> f = std::make_tuple(recv_request1, recv_request2)
-                            recv_requests.at(neighborRank).push_back(f);
-                            MPI_Irecv(boundary_vertices_from_other_ranks.at(neighborRank).at(0), 1, MPI_INT, 
-                                neighborRank, tag, MPI_COMM_WORLD, recv_requests.at(neighborRank).back().at(0));
-                            MPI_Irecv(boundary_vertices_from_other_ranks.at(neighborRank).at(1), 1, MPI_INT, 
-                                neighborRank, tag, MPI_COMM_WORLD, recv_requests.at(neighborRank).back().at(1));
+                            MPI_Irecv(&(recv_buf[counter]), 3, MPI_INT, neighborRank, 0, MPI_COMM_WORLD, &recvRequest);
+                            requests.push_back(recvRequest);
+                            counter += 3;
                         }
+                        
                     }
                 }
                 
-            }
-            
+                MPI_Waitall(requests.size(), requests.data(), MPI_STATUS_IGNORE);
+                printf("[%d] num_external_edges = %d\n", rank, num_external_edges);
+                for (int i = 0; i < requests.size(); i = i + 3) {
+                    idx_t neighborIdx = recv_buf[i];
+                    idx_t neighborColor = recv_buf[i + 1];
+                    idx_t myIdx = recv_buf[i + 2];
 
+                    printf("[%d] received (%d, %d, %d)\n", rank, neighborIdx, neighborIdx, myIdx);
 
-            
-        }
+                    for (int j = graph->xadj[myIdx]; j < graph->xadj[myIdx+1]; j++) {
+                        if (neighborIdx == graph->adjncy[j]) {
+                            boundaryColors.at(j) = neighborColor;
+                            break;
+                        }
+                    }
+                }
+                delete[] recv_buf;
+                delete[] send_buf;
+                
+                std::vector<idx_t> R;
+                for (idx_t i : U) {
+                    idx_t myColor = graph->vwgt[i];
+                    for (int j = graph->xadj[i]; j < graph->xadj[i+1]; j++) {    // for every edge
+                        idx_t neighborIdx = graph->adjncy[j];   // this is their local index
+                        idx_t neighborRank = graph->adjwgt[j];
+
+                        if (neighborRank != rank) {
+                            if (myColor == boundaryColors.at(j) && rand() % 2 == 0) {
+                                R.push_back(i);
+                            }
+                        }
+                    }
+                }
+                U = R;
+            }   // end of superstep
+        }   // end of "if U is not empty"
 
         size_U = U.size();
         MPI_Allreduce(&size_U, &max_size_U, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-    }
+        max_size_U = 0; // tmp
+    }   // end of while loop
 }
 
 
@@ -233,15 +273,17 @@ void colorGraph(graph_t *graph, std::size_t s) {
  * @param[in,out] graph the whole graph to be colored in this rank.
  */
 void colorGraphSerial(std::vector<idx_t> const& U, graph_t *graph) {
-    bool neighbor_colors[MAX_COLOR];
+    //bool neighbor_colors[MAX_COLOR];
+    std::array<bool, MAX_COLOR> neighbor_colors;
     for (int i = 0; i < U.size(); i++) {
 
         idx_t vertex = U.at(i);
-        std::fill(neighbor_colors + 0, neighbor_colors + MAX_COLOR, false);
+        //std::fill(neighbor_colors + 0, neighbor_colors + MAX_COLOR, false);
+        std::fill(neighbor_colors.begin(), neighbor_colors.end(), false);
 
         for (int j = graph->xadj[vertex]; j < graph->xadj[vertex + 1]; j++) {
             idx_t neighbor = graph->adjncy[j];
-            neighbor_colors[graph->vwgt[neighbor]] = true; // this color is used
+            neighbor_colors.at(graph->vwgt[neighbor]) = true; // this color is used
         }
         for (std::size_t j = 1; j < MAX_COLOR; j++) {
             if (!neighbor_colors[j]) { // first color not used
@@ -253,35 +295,22 @@ void colorGraphSerial(std::vector<idx_t> const& U, graph_t *graph) {
 }
 
 std::vector<std::vector<idx_t>> partitionU(std::vector<idx_t> const& U, std::size_t s) {
-    std::vector<std::vector<idx_t>> Us (U.size() / s);
+    std::vector<std::vector<idx_t>> Us;
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
     for (std::size_t i = 0; i < U.size(); i += s) {
         auto last = std::min(U.size(), i + s);
         Us.emplace_back(U.begin() + i, U.begin() + last);
+        //printf("[%d] Us[%d].size() = %lu\n", rank, i / s, Us.at().size());
+
     }
 
     return Us;
 }
 
-std::map<int, std::vector<std::tuple<int, int>>> getBoundaryVertices(graph_t *graph, std::vector<idx_t> const& U) {
-    int rank, size;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
-    std::map<int, std::vector<std::tuple<int, int, int>>> boundaryVertices;
-
-
-    for (int i : U) {    // for every vertex
-        for (int j = graph->xadj[i]; j < graph->xadj[i+1]; j++) {    // for every edge
-            idx_t neighborIdx = graph->adjncy[j];   // this is their local index
-            // idx_t neighborRank = graph->adjwgt[j];
-
-            if (neighborRank != rank) { // is a boundary vertex
-                std::tuple<int, int, int> f = std::make_tuple(i, graph->vwgt[i]);
-                boundaryVertices.at(neighborRank).push_back(f);
-            }
-        }
-    }
-    return boundaryVertices;
+void getBoundaryVertices(graph_t *graph, std::vector<idx_t> const& U) {
+    
 }
 
 /** Outputs the coloring info of a graph into a stream.
