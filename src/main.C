@@ -67,11 +67,10 @@ int main(int argc, char **argv) {
     avgDuration /= static_cast<double>(size);
 
     if (rank == 0) {
-        std::cout << "Rank 0 Duration:  " << duration
-                  << "Min Duration:     " << minDuration
-                  << "Max Duration:     " << maxDuration
-                  << "Average Duration: " << avgDuration
-                  << "\n";
+        std::cout << "Rank 0 Duration:  " << duration    << "\n"
+                  << "Min Duration:     " << minDuration << "\n"
+                  << "Max Duration:     " << maxDuration << "\n"
+                  << "Average Duration: " << avgDuration << "\n";
     }
 
     /* clean up */
@@ -111,8 +110,9 @@ graph_t *tmpGetGraph() {
 
     graph_t *graph = new graph_t;
     constexpr idx_t NVERTS = 5;
-    graph->nvtxs = 5;
-    graph->vwgt = new idx_t[5];
+    graph->nvtxs = NVERTS;
+    graph->vwgt = new idx_t[NVERTS];
+    std::fill(graph->vwgt + 0, graph->vwgt + NVERTS, 0);
 
 
     if (rank == 0) {
@@ -175,7 +175,7 @@ void colorGraph(graph_t *graph, std::size_t s) {
             std::vector<std::vector<idx_t>> Us = partitionU(U, s);
         
             // Supersteps -- color each subset of U
-            for (idx_t k = 0; k < graph->nvtxs / s; k++) {     // (8)
+            for (idx_t k = 0; k < Us.size(); k++) {     // (8)
                 colorGraphSerial(Us.at(k), graph); // (9-10)
 
                 printf("[%d] Us[%d].size() = %lu\n", rank, k, Us.at(k).size());
@@ -184,7 +184,6 @@ void colorGraph(graph_t *graph, std::size_t s) {
                 // 1. find all boundary vertices
                 std::vector<idx_t> boundaryColors (graph->nedges, -1);
                 std::vector<MPI_Request> requests;
-                idx_t buf[3];
                 int num_external_edges = 0;
                 
                 // count all of graph->adjwgt != rank
@@ -193,6 +192,8 @@ void colorGraph(graph_t *graph, std::size_t s) {
                 }
 
                 idx_t *recv_buf = new idx_t[3 * num_external_edges];
+                std::fill(recv_buf + 0, recv_buf + (3*num_external_edges), -1);
+                idx_t *send_buf = new idx_t[3 * num_external_edges];
                 int counter = 0;
                 requests.reserve(num_external_edges);
                 for (idx_t i : Us.at(k)) {
@@ -206,25 +207,25 @@ void colorGraph(graph_t *graph, std::size_t s) {
 
                         if (neighborRank != rank) { // is a boundary vertex
 
-                            buf[0] = i; buf[1] = myColor; buf[2] = neighborIdx;
+                            send_buf[counter] = i; send_buf[counter + 1] = myColor; send_buf[counter + 2] = neighborIdx;
                         
                             MPI_Request recvRequest, sendRequest;
-                            requests.push_back(recvRequest);
-                            MPI_Isend(buf, 3, MPI_INT, neighborRank, 0, MPI_COMM_WORLD, &sendRequest);
+                            MPI_Isend(&(send_buf[counter]), 3, MPI_INT, neighborRank, 0, MPI_COMM_WORLD, &sendRequest);
 
                             printf("%d sent (%d, %d, %d) to %d\n", rank, i, myColor, neighborIdx, neighborRank);
                             fflush(stdout);
                             
                             MPI_Irecv(&(recv_buf[counter]), 3, MPI_INT, neighborRank, 0, MPI_COMM_WORLD, &recvRequest);
+                            requests.push_back(recvRequest);
                             counter += 3;
                         }
                         
                     }
                 }
                 
-                MPI_Waitall(requests.size(), requests.data(), MPI_STATUS_IGNORE);    
-                
-                for (int i = 0; i < 3 * num_external_edges; i = i + 3) {
+                MPI_Waitall(requests.size(), requests.data(), MPI_STATUS_IGNORE);
+                printf("[%d] num_external_edges = %d\n", rank, num_external_edges);
+                for (int i = 0; i < requests.size(); i = i + 3) {
                     idx_t neighborIdx = recv_buf[i];
                     idx_t neighborColor = recv_buf[i + 1];
                     idx_t myIdx = recv_buf[i + 2];
@@ -239,6 +240,7 @@ void colorGraph(graph_t *graph, std::size_t s) {
                     }
                 }
                 delete[] recv_buf;
+                delete[] send_buf;
                 
                 std::vector<idx_t> R;
                 for (idx_t i : U) {
@@ -260,6 +262,7 @@ void colorGraph(graph_t *graph, std::size_t s) {
 
         size_U = U.size();
         MPI_Allreduce(&size_U, &max_size_U, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+        max_size_U = 0; // tmp
     }   // end of while loop
 }
 
@@ -270,15 +273,17 @@ void colorGraph(graph_t *graph, std::size_t s) {
  * @param[in,out] graph the whole graph to be colored in this rank.
  */
 void colorGraphSerial(std::vector<idx_t> const& U, graph_t *graph) {
-    bool neighbor_colors[MAX_COLOR];
+    //bool neighbor_colors[MAX_COLOR];
+    std::array<bool, MAX_COLOR> neighbor_colors;
     for (int i = 0; i < U.size(); i++) {
 
         idx_t vertex = U.at(i);
-        std::fill(neighbor_colors + 0, neighbor_colors + MAX_COLOR, false);
+        //std::fill(neighbor_colors + 0, neighbor_colors + MAX_COLOR, false);
+        std::fill(neighbor_colors.begin(), neighbor_colors.end(), false);
 
         for (int j = graph->xadj[vertex]; j < graph->xadj[vertex + 1]; j++) {
             idx_t neighbor = graph->adjncy[j];
-            neighbor_colors[graph->vwgt[neighbor]] = true; // this color is used
+            neighbor_colors.at(graph->vwgt[neighbor]) = true; // this color is used
         }
         for (std::size_t j = 1; j < MAX_COLOR; j++) {
             if (!neighbor_colors[j]) { // first color not used
