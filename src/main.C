@@ -22,7 +22,7 @@
 // 3rd party libs
 #include "mpi.h"
 #include <metislib.h>
-
+#include "metisbin.h"
 
 constexpr std::size_t MAX_COLOR = 1000;
 
@@ -37,6 +37,13 @@ void outputColoring(graph_t *graph, std::ostream &out);
 
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
+
+    /* check args to prevent undefined abortion */
+    if (argc < 3){
+        std::cout << "Usage:" << argv[0]  
+                  << " [graph filename] [chunkSize]" << std::endl;
+        // MPI_Abort(MPI_COMM_WORLD, 1);
+    }
 
     /* primitive MPI info */
     int rank, size;
@@ -91,9 +98,29 @@ graph_t *getGraph(std::string const& filename) {
 
     /* [TODO] -- use ReadGraph and partition with MPI
                  or use ParMETIS */
+    /* The rank 0 reads the graph file, calls the partition
+        and then send to each rank */
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    graph_t *graph_full;
+    if (rank == 0){
+        /* Set the parameter */
+        params_t *params;
+        params = (params_t*)malloc(sizeof(params_t));
+        memset((void*)params, 0, sizeof(params_t));
+        params->gtype     = METIS_GTYPE_DUAL;
+        params->ncommon   = 1;
+        params->dbglvl    = 0;
+        params->filename  = filename.c_str();
+        params->outfile   = NULL;
 
-    return tmpGetGraph();
-    //return static_cast<graph_t *>(nullptr);
+        graph_full = ReadGraph(params);
+    }
+    
+
+    // return tmpGetGraph();
+    return static_cast<graph_t *>(graph_full);
 }
 
 

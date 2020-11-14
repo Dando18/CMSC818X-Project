@@ -166,7 +166,7 @@ graph_t *ReadGraph(params_t *params)
     exit(0);
   }
 
-  gk_free((void *)&line, LTERM);
+  // gk_free((void *)&line, LTERM);
 
   return graph;
 }
@@ -262,7 +262,7 @@ mesh_t *ReadMesh(params_t *params)
   mesh->ncon = (ncon == 0 ? 1 : ncon);
   mesh->nn   = imax(eptr[mesh->ne], eind)+1;
 
-  gk_free((void *)&line, LTERM);
+  // gk_free((void *)&line, LTERM);
 
   return mesh;
 }
@@ -396,7 +396,7 @@ void ReadTPwgts(params_t *params, idx_t ncon)
   free(line);
   line = NULL; /* set to null to match behavior of gk_free() */
   #else
-  gk_free((void *)&line, LTERM);
+  // gk_free((void *)&line, LTERM);
   #endif
 }
 
