@@ -17,7 +17,7 @@ TARGET = partition
 all: $(TARGET)
 
 partition: partition.cpp 
-	$(CXX) $(FLAGS) -o $@ $< --std=c++11 $(METISLIB_INC) $(LD) -lmetis -lm
+	$(MPICC) $(FLAGS) -o $@ $< --std=c++11 $(METISLIB_INC) $(LD) -lmetis -lm
 
 ../bin/run: main.C
 	if [ ! -d "../bin" ]; then mkdir -p ../bin; fi;
