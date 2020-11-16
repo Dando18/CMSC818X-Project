@@ -237,7 +237,7 @@ graph_t *getGraph(std::string const& filename) {
             if (proc == 0) {
                 memcpy(graph_local, now_graph, sizeof(graph));
                 graph_local->xadj = new idx_t[graph_local->nvtxs];
-                memcpy(graph_local->xadj, now_graph->xadj, sizeof(idx_t) * graph_local->nvtxs);
+                memcpy(graph_local->xadj, now_graph->xadj, sizeof(idx_t) * (1+graph_local->nvtxs));
             
                 graph_local->adjncy = new idx_t[graph_local->nedges];
                 memcpy(graph_local->adjncy, now_graph->adjncy, sizeof(idx_t) * graph_local->nedges);
@@ -250,7 +250,7 @@ graph_t *getGraph(std::string const& filename) {
                 else if (sizeof(idx_t) == 8) datatype = MPI_LONG;
                 else datatype = MPI_INT;
                 MPI_Send(now_graph, sizeof(graph_t), MPI_CHAR, proc, 49, MPI_COMM_WORLD);
-                MPI_Send(now_graph->xadj, now_graph->nvtxs, datatype, proc, 50, MPI_COMM_WORLD);
+                MPI_Send(now_graph->xadj, now_graph->nvtxs+1, datatype, proc, 50, MPI_COMM_WORLD);
                 MPI_Send(now_graph->adjncy, now_graph->nedges, datatype, proc, 51, MPI_COMM_WORLD);
                 MPI_Send(now_graph->adjwgt, now_graph->nedges, datatype, proc, 52, MPI_COMM_WORLD);
             }
@@ -272,7 +272,7 @@ graph_t *getGraph(std::string const& filename) {
         else if (sizeof(idx_t) == 8) datatype = MPI_LONG;
         else datatype = MPI_INT;
         graph_local->xadj = new idx_t[graph_local->nvtxs];
-        MPI_Recv(graph_local->xadj, graph_local->nvtxs, datatype, 0, 50, MPI_COMM_WORLD, &status);
+        MPI_Recv(graph_local->xadj, graph_local->nvtxs+1, datatype, 0, 50, MPI_COMM_WORLD, &status);
         graph_local->adjncy = new idx_t[graph_local->nedges];
         graph_local->adjwgt = new idx_t[graph_local->nedges];
         MPI_Recv(graph_local->adjncy, graph_local->nedges, datatype, 0, 51, MPI_COMM_WORLD, &status);
@@ -739,7 +739,7 @@ void prepareForPartition(idx_t options[], params_t *params, int starting_index)
 void printGraph(graph_t *graph){
     std::cout << "N=" << graph->nvtxs << " m=" << graph->nedges << std::endl; 
     std::cout << "xadj:";
-    for (int n=0; n<graph->nvtxs; n++) 
+    for (int n=0; n<graph->nvtxs+1; n++) 
         std::cout << graph->xadj[n] << " ";
     std::cout << std::endl;
 
@@ -752,6 +752,12 @@ void printGraph(graph_t *graph){
     for (int n=0; n<graph->nedges; n++) 
         std::cout << graph->adjwgt[n] << " ";
     std::cout << std::endl;
+    
+    std::cout << "vwgt:";
+    for (int n=0; n<graph->nvtxs; n++) 
+        std::cout << graph->vwgt[n] << " ";
+    std::cout << std::endl;
+    
 }
 
 
