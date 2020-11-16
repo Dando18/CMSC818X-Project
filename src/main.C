@@ -82,7 +82,7 @@ int main(int argc, char **argv) {
         if (rank == proc) {
             std::cout << "=========================" << std::endl; 
             std::cout << "Print Graph in process " << proc << std::endl;
-            printGraph(graph);
+            //printGraph(graph);
             std::cout << "=========================" << std::endl; 
         }
         MPI_Barrier(MPI_COMM_WORLD);
@@ -164,7 +164,7 @@ graph_t *getGraph(std::string const& filename) {
                 &objval, part);
         for (idx_t i=0; i<graph->nvtxs; i++){
             part[i] -= starting_index;
-            std::cout << "Node:" << i << "\tPart:" << part[i] << std::endl; 
+            //std::cout << "Node:" << i << "\tPart:" << part[i] << std::endl; 
         }
         getchar();
         // broadcast
@@ -342,10 +342,10 @@ graph_t *tmpGetGraph() {
 }
 
 void deleteGraph(graph_t *graph) {
-    delete graph->vwgt;
-    delete graph->adjncy;
-    delete graph->adjwgt;
-    delete graph->xadj;
+    delete[] graph->vwgt;
+    delete[] graph->adjncy;
+    delete[] graph->adjwgt;
+    delete[] graph->xadj;
 }
 
 
