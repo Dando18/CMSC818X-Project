@@ -21,6 +21,7 @@
 #include <map>
 #include <algorithm>
 #include <cstdio>
+#include <math.h>
 
 // 3rd party libs
 #include "mpi.h"
@@ -37,6 +38,7 @@ struct coloring_stats_t {
 /* forward declare functions */
 graph_t *getGraph(std::string const& filename);
 graph_t *tmpGetGraph();
+graph_t *tmpGetBipartieGraph();
 void deleteGraph(graph_t *graph);
 void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out);
 void colorGraphSerial(std::vector<idx_t> const& U, graph_t *graph, std::vector<idx_t> const& boundaryColors);
@@ -74,11 +76,15 @@ int main(int argc, char **argv) {
 
     /* Read in graph structure and partition */
     graph_t *graph = getGraph(fileName);
+    // graph_t *graph = tmpGetBipartieGraph();
     graph->vwgt = new idx_t[graph->nvtxs];
     std::fill(graph->vwgt + 0, graph->vwgt + graph->nvtxs, -1);
 
+    std::cout << "[" << rank << "] getGraph done!" << std::endl;
+    //MPI_Finalize();
+    //return 0;
     // For debug
-    for (int proc=0; proc<size; proc++) {
+    /*for (int proc=0; proc<size; proc++) {
         if (rank == proc) {
             std::cout << "=========================" << std::endl; 
             std::cout << "Print Graph in process " << proc << std::endl;
@@ -86,7 +92,7 @@ int main(int argc, char **argv) {
             std::cout << "=========================" << std::endl; 
         }
         MPI_Barrier(MPI_COMM_WORLD);
-    }
+    }*/
     MPI_Barrier(MPI_COMM_WORLD);
 
     /* color graph in parallel */
@@ -96,7 +102,7 @@ int main(int argc, char **argv) {
     double end = MPI_Wtime();
 
     /* output coloring to file or stdout */ 
-    outputColoring(graph, std::cout);
+    //outputColoring(graph, std::cout);
 
     /* aggregate timing info and output on rank 0 */
     double duration = end - start;
@@ -149,7 +155,7 @@ graph_t *getGraph(std::string const& filename) {
 
         idx_t starting_index = simpleReadGraph(filename.c_str(), graph);
         //std::cout << "Starting index" << starting_index << "\tSize" << size << std::endl;
-
+        
         setParams(params, graph, size);
         GPPrintInfo(params, graph);
         idx_t options[METIS_NOPTIONS];
@@ -163,17 +169,36 @@ graph_t *getGraph(std::string const& filename) {
                 graph->adjncy, graph->vwgt, graph->vsize, graph->adjwgt, 
                 &params->nparts, params->tpwgts, params->ubvec, options, 
                 &objval, part);
-        for (idx_t i=0; i<graph->nvtxs; i++){
-            part[i] -= starting_index;
-            //std::cout << "Node:" << i << "\tPart:" << part[i] << std::endl; 
+        
+        switch (status) {
+            case METIS_OK: std::cout << "METIS_OK" << std::endl; break;
+            case METIS_ERROR_INPUT: std::cout << "METIS_ERROR_INPUT" << std::endl; break;
+            case METIS_ERROR_MEMORY: std::cout << "METIS_ERROR_MEMORY" << std::endl; break;
+            case METIS_ERROR: std::cout << "METIS_ERROR" << std::endl; break;
         }
+
+        std::cout << "params->nparts = " << params->nparts << std::endl;
+
+        std::set<idx_t> uniqueParts;
+
+        for (idx_t i=0; i<graph->nvtxs; i++){
+            uniqueParts.insert(part[i]);
+            part[i] -= starting_index;
+        }
+
+        std::cout << "num unique parts = " << uniqueParts.size() << std::endl;
+        if (uniqueParts.size() != size) {
+            std::cerr << "For some odd reason 'METIS_PartGraphKway' did not generate the correct number of graph partitions." << std::endl;
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+
         //getchar();
         // broadcast
         // set up a mapping from global_idx to (rank, local_idx)
         std::map<idx_t, std::pair<idx_t, idx_t> > g_to_l;
         std::vector<idx_t> local_num(size, 0);
         for (idx_t i=0; i<graph->nvtxs; i++) {
-            g_to_l[i] = std::make_pair(part[i], local_num[part[i]]++);
+            g_to_l.insert(std::make_pair(i, std::make_pair(part[i], local_num.at(part[i])++)));
         }
         // for (auto x:g_to_l) {
         //     std::cout << x.first << " (" << x.second.first 
@@ -186,7 +211,7 @@ graph_t *getGraph(std::string const& filename) {
         std::vector<std::vector<idx_t>> adjncy_all(size);
         std::vector<std::vector<idx_t>> adjwgt_all(size);
         std::vector<std::vector<idx_t>> xadj_all(size);
-        for (int i=0; i<size; i++) xadj_all[i].push_back(0);
+        for (int i=0; i<size; i++) xadj_all.at(i).push_back(0);
         // std::cout << "1 :" << adjncy_all.size() << std::endl;
         // std::cout << "2 :" << adjwgt_all.size() << std::endl;
 
@@ -199,7 +224,7 @@ graph_t *getGraph(std::string const& filename) {
             graph_local_all[proc]->nvtxs = local_num[proc];
         for (int i=0; i<graph->nvtxs; i++)
         {
-            idx_t lrank = g_to_l[i].first;
+            idx_t lrank = g_to_l.at(i).first;
             for (int edg_idx=graph->xadj[i]; 
                      edg_idx<graph->xadj[i+1];
                      edg_idx++)
@@ -210,27 +235,27 @@ graph_t *getGraph(std::string const& filename) {
                 // std::cout << "edg_idx " << g_to_l[edg].second << " "  << lrank << std::endl;
                 // std::cout << adjncy_all[lrank].size() << "!" <<  adjwgt_all[lrank].size() << "!" << std::endl;
                 // std::cout <<  g_to_l[edg].first << "!!" << g_to_l[edg].second << "!!" << std::endl;
-                adjncy_all[lrank].push_back(g_to_l[edg].second);
+                adjncy_all[lrank].push_back(g_to_l.at(edg).second);
                 // std::cout << "Here" << std::endl;
-                adjwgt_all[lrank].push_back(g_to_l[edg].first);
+                adjwgt_all[lrank].push_back(g_to_l.at(edg).first);
             
             }
             // std::cout << "Here Outside : " << adjncy_all[lrank].size() << std::endl;
             // std::cout << "xadj_all" << xadj_all[lrank][0] << std::endl;
-            xadj_all[lrank].push_back(adjncy_all[lrank].size());
+            xadj_all.at(lrank).push_back(adjncy_all.at(lrank).size());
         }
         for (int proc=0; proc<size; proc++)
-            graph_local_all[proc]->nedges = adjncy_all[proc].size();
+            graph_local_all[proc]->nedges = adjncy_all.at(proc).size();
         
         idx_t runningTotal = 0;
         for (int proc=0; proc<size; proc++) { 
             graph_t *now_graph = graph_local_all[proc];
-            now_graph->adjncy = new idx_t [adjncy_all[proc].size()];
-            std::copy(adjncy_all[proc].begin(), adjncy_all[proc].end(), now_graph->adjncy);
-            now_graph->adjwgt = new idx_t [adjwgt_all[proc].size()];
-            std::copy(adjwgt_all[proc].begin(), adjwgt_all[proc].end(), now_graph->adjwgt);
-            now_graph->xadj = new idx_t [xadj_all[proc].size()];
-            std::copy(xadj_all[proc].begin(), xadj_all[proc].end(), now_graph->xadj);
+            now_graph->adjncy = new idx_t [adjncy_all.at(proc).size()];
+            std::copy(adjncy_all.at(proc).begin(), adjncy_all.at(proc).end(), now_graph->adjncy);
+            now_graph->adjwgt = new idx_t [adjwgt_all.at(proc).size()];
+            std::copy(adjwgt_all.at(proc).begin(), adjwgt_all.at(proc).end(), now_graph->adjwgt);
+            now_graph->xadj = new idx_t [xadj_all.at(proc).size()];
+            std::copy(xadj_all.at(proc).begin(), xadj_all.at(proc).end(), now_graph->xadj);
 
             now_graph->ncon = runningTotal;
             runningTotal += now_graph->nvtxs;
@@ -242,7 +267,7 @@ graph_t *getGraph(std::string const& filename) {
             graph_t *now_graph = graph_local_all[proc];
             if (proc == 0) {
                 memcpy(graph_local, now_graph, sizeof(graph));
-                graph_local->xadj = new idx_t[graph_local->nvtxs];
+                graph_local->xadj = new idx_t[graph_local->nvtxs+1];
                 memcpy(graph_local->xadj, now_graph->xadj, sizeof(idx_t) * (1+graph_local->nvtxs));
             
                 graph_local->adjncy = new idx_t[graph_local->nedges];
@@ -255,10 +280,14 @@ graph_t *getGraph(std::string const& filename) {
                 if (sizeof(idx_t) == 4) datatype = MPI_INT;
                 else if (sizeof(idx_t) == 8) datatype = MPI_LONG;
                 else datatype = MPI_INT;
-                MPI_Send(now_graph, sizeof(graph_t), MPI_CHAR, proc, 49, MPI_COMM_WORLD);
-                MPI_Send(now_graph->xadj, now_graph->nvtxs+1, datatype, proc, 50, MPI_COMM_WORLD);
-                MPI_Send(now_graph->adjncy, now_graph->nedges, datatype, proc, 51, MPI_COMM_WORLD);
-                MPI_Send(now_graph->adjwgt, now_graph->nedges, datatype, proc, 52, MPI_COMM_WORLD);
+                //MPI_Send(now_graph, sizeof(graph_t), MPI_CHAR, proc, 49, MPI_COMM_WORLD);
+                MPI_Send(&(now_graph->nvtxs), 1, datatype, proc, 49, MPI_COMM_WORLD);
+                MPI_Send(&(now_graph->nedges), 1, datatype, proc, 50, MPI_COMM_WORLD);
+                MPI_Send(&(now_graph->ncon), 1, datatype, proc, 51, MPI_COMM_WORLD);
+                MPI_Send(now_graph->xadj, now_graph->nvtxs+1, datatype, proc, 52, MPI_COMM_WORLD);
+                MPI_Send(now_graph->adjncy, now_graph->nedges, datatype, proc, 53, MPI_COMM_WORLD);
+                MPI_Send(now_graph->adjwgt, now_graph->nedges, datatype, proc, 54, MPI_COMM_WORLD);
+                
             }
            
         }
@@ -271,21 +300,21 @@ graph_t *getGraph(std::string const& filename) {
         // delete params;
     }
     else {
-        MPI_Status status;
-        MPI_Recv(graph_local, sizeof(graph_t), MPI_CHAR, 0, 49, MPI_COMM_WORLD, &status);
+
         MPI_Datatype datatype;
         if (sizeof(idx_t) == 4) datatype = MPI_INT;
         else if (sizeof(idx_t) == 8) datatype = MPI_LONG;
         else datatype = MPI_INT;
-        graph_local->xadj = new idx_t[graph_local->nvtxs];
-        MPI_Recv(graph_local->xadj, graph_local->nvtxs+1, datatype, 0, 50, MPI_COMM_WORLD, &status);
+        MPI_Recv(&(graph_local->nvtxs), 1, datatype, 0, 49, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&(graph_local->nedges), 1, datatype, 0, 50, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&(graph_local->ncon), 1, datatype, 0, 51, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        graph_local->xadj = new idx_t[graph_local->nvtxs+1];
+        MPI_Recv(graph_local->xadj, graph_local->nvtxs+1, datatype, 0, 52, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         graph_local->adjncy = new idx_t[graph_local->nedges];
         graph_local->adjwgt = new idx_t[graph_local->nedges];
-        MPI_Recv(graph_local->adjncy, graph_local->nedges, datatype, 0, 51, MPI_COMM_WORLD, &status);
-        MPI_Recv(graph_local->adjwgt, graph_local->nedges, datatype, 0, 52, MPI_COMM_WORLD, &status);
+        MPI_Recv(graph_local->adjncy, graph_local->nedges, datatype, 0, 53, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(graph_local->adjwgt, graph_local->nedges, datatype, 0, 54, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
-    // return tmpGetGraph();
-    // std::cout << "Final" << " " << rank << std::endl;
     return static_cast<graph_t *>(graph_local);
 }
 
@@ -347,6 +376,73 @@ graph_t *tmpGetGraph() {
     return graph;
 }
 
+graph_t *tmpGetBipartieGraph() {
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    if (size != 4) {
+        MPI_Abort(MPI_COMM_WORLD, 0);
+    }
+
+    graph_t *graph = new graph_t;
+
+
+
+    if (rank == 0) {
+        constexpr idx_t NVERTS = 2;
+        graph->nvtxs = NVERTS;
+        graph->vwgt = new idx_t[NVERTS];
+        graph->ncon = 0;
+        std::fill(graph->vwgt + 0, graph->vwgt + NVERTS, -1);
+        constexpr idx_t NEDGES = 3;
+        graph->nedges = NEDGES;
+        graph->adjncy = new idx_t[NEDGES] {0, 1, 0};
+        graph->adjwgt = new idx_t[NEDGES] {1, 3, 1};
+        graph->xadj = new idx_t[NVERTS+1] {0, 2, 3};
+        
+
+    } else if (rank == 1) {
+        constexpr idx_t NVERTS = 3;
+        graph->nvtxs = NVERTS;
+        graph->vwgt = new idx_t[NVERTS];
+        graph->ncon = 2;
+        std::fill(graph->vwgt + 0, graph->vwgt + NVERTS, -1);
+        constexpr idx_t NEDGES = 12;
+        graph->nedges = NEDGES;
+        graph->adjncy = new idx_t[NEDGES] {0, 1, 2, 0, 1, 0, 1, 0, 2, 0, 1, 0};
+        graph->adjwgt = new idx_t[NEDGES] {3, 1, 1, 0, 0, 1, 3, 2, 3, 1, 3, 2};
+        graph->xadj = new idx_t[NVERTS+1] {0, 5, 9, 12};
+
+    } else if (rank == 2) {
+        constexpr idx_t NVERTS = 2;
+        graph->nvtxs = NVERTS;
+        graph->vwgt = new idx_t[NVERTS];
+        graph->ncon = 5;
+        std::fill(graph->vwgt + 0, graph->vwgt + NVERTS, -1);
+        constexpr idx_t NEDGES = 4;
+        graph->nedges = NEDGES;
+        graph->adjncy = new idx_t[NEDGES] {0, 1, 2, 0};
+        graph->adjwgt = new idx_t[NEDGES] {3, 1, 1, 3};
+        graph->xadj = new idx_t[NVERTS+1] {0, 3, 4};
+
+    } else if (rank == 3) {
+        constexpr idx_t NVERTS = 3;
+        graph->nvtxs = NVERTS;
+        graph->vwgt = new idx_t[NVERTS];
+        graph->ncon = 7;
+        std::fill(graph->vwgt + 0, graph->vwgt + NVERTS, -1);
+        constexpr idx_t NEDGES = 11;
+        graph->nedges = NEDGES;
+        graph->adjncy = new idx_t[NEDGES] {0, 1, 0, 2, 1, 0, 1, 2, 0, 0, 1};
+        graph->adjwgt = new idx_t[NEDGES] {1, 3, 2, 3, 2, 3, 1, 1, 0, 3, 1};
+        graph->xadj = new idx_t[NVERTS+1] {0, 5, 9, 11};
+
+    }
+
+    return graph;
+}
+
 void deleteGraph(graph_t *graph) {
     delete[] graph->vwgt;
     delete[] graph->adjncy;
@@ -367,16 +463,16 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
     std::vector<idx_t> U (graph->nvtxs);
     std::vector<idx_t> boundaryColors (graph->nedges, -1);
     std::vector<idx_t> previousColors (graph->nvtxs, -1);
-    std::vector<idx_t> graphSizes(size, 0);
+    std::vector<idx_t> graphSizes(size+1, 0);
     std::iota(U.begin(), U.end(), 0);
 
-    MPI_Allgather(&graph->ncon, 1, MPI_INT, graphSizes.data(), graphSizes.size(), MPI_INT, MPI_COMM_WORLD);
+    MPI_Allgather(&(graph->ncon), 1, MPI_INT, graphSizes.data(), 1, MPI_INT, MPI_COMM_WORLD);
 
     int size_U = U.size();
     int max_size_U = 1;
     int loop = 0;
     while (max_size_U != 0) {   // (5)
-        
+
         if (size_U != 0) {      // (6)
             // Partition U into subsets
             std::vector<std::vector<idx_t>> Us = partitionU(U, s);
@@ -499,7 +595,7 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
             //U = R;
             U.assign(R.begin(), R.end());
             //std::cout << "[" << rank << "] need to recolor " << U.size() << " or " << R.size() << " verts.\n";
-            std::cout << "loop " << loop << " Color of rank [" << rank << "] = [";
+            /*std::cout << "loop " << loop << " Color of rank [" << rank << "] = [";
             for (idx_t i = 0; i < graph->nvtxs; i++) {
                 std::cout << graph->vwgt[i] << " ";
             }
@@ -509,19 +605,13 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
             for (idx_t i : R) {
                 std::cout << i << " ";
             }
-            std::cout << "]" << std::endl;
+            std::cout << "]" << std::endl;*/
         }   // end of "if U is not empty"
 
         size_U = U.size();
         MPI_Allreduce(&size_U, &max_size_U, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
 
-        //fflush(stdout);
-        if (rank == 0) {    
-            //std::cout << "\n\nEND OF WHILE\n\n";
-            //fflush(stdout);
-        }
         loop++;
-        //if (loop > 3) max_size_U = 0;
     }   // end of while loop
 
     out.numIterations = loop;
@@ -576,13 +666,19 @@ void colorGraphSerialTest(std::vector<idx_t> const& U, graph_t *graph, int loop,
 }
 
 std::vector<std::vector<idx_t>> partitionU(std::vector<idx_t> const& U, std::size_t s) {
-    std::vector<std::vector<idx_t>> Us;
-    int rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    std::vector<std::vector<idx_t>> Us;// (ceil(U.size() / s));
+    //int rank;
+    //MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
     for (std::size_t i = 0; i < U.size(); i += s) {
         auto last = std::min(U.size(), i + s);
-        Us.emplace_back(U.begin() + i, U.begin() + last);
+        //Us.emplace_back(U.begin() + i, U.begin() + last);
+        std::vector<idx_t> v;
+        for (std::size_t j = i; j < last; j++) {
+            v.push_back(U.at(j));
+        }
+        //std::vector<idx_t> v (U.begin() + i, U.begin() + last);
+        Us.push_back(v);
     }
 
     return Us;
@@ -672,6 +768,8 @@ idx_t simpleReadGraph(std::string filename, graph_t *graph)
     std::fill(graph->vwgt + 0, graph->vwgt + NVERTS, 1);
     graph->adjwgt = new idx_t[NEDGES];
     std::fill(graph->adjwgt + 0, graph->adjwgt + NVERTS, 1);
+
+    graph->vsize = new idx_t[NVERTS];
     
     // graph->adjwgt = new idx_t[NEDGES] {0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2};
     graph->ncon = 1;
@@ -701,7 +799,7 @@ void setParams(params_t *params, graph_t *graph, idx_t nparts)
 
   params->dbglvl        = 0;
   params->balance       = 0;
-  params->seed          = -1;
+  params->seed          = 1;
   params->dbglvl        = 0;
 
   params->tpwgtsfile    = NULL;
@@ -714,10 +812,11 @@ void setParams(params_t *params, graph_t *graph, idx_t nparts)
   params->ubvec         = NULL;
 
   params->nparts        = nparts;
-    params->tpwgts = new real_t [graph->ncon * params->nparts];
-    std::fill(params->tpwgts + 0, 
-        params->tpwgts + graph->ncon * params->nparts,
-         1.0/ params->nparts);
+  params->tpwgts = NULL;
+    //params->tpwgts = new real_t [graph->ncon * params->nparts];
+    //std::fill(params->tpwgts + 0, 
+    //    params->tpwgts + graph->ncon * params->nparts,
+    //     1.0/ params->nparts);
     // params->ubvec = new real_t [graph->ncon]{1.05};
 
 //     /* initialize the params data structure */
