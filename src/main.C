@@ -78,16 +78,16 @@ int main(int argc, char **argv) {
     graph->vwgt = new idx_t[graph->nvtxs];
     std::fill(graph->vwgt + 0, graph->vwgt + graph->nvtxs, -1);
 
-    // For debug
-    for (int proc=0; proc<size; proc++) {
-        if (rank == proc) {
-            std::cout << "=========================" << std::endl; 
-            std::cout << "Print Graph in process " << proc << std::endl;
-            printGraph(graph);
-            std::cout << "=========================" << std::endl; 
-        }
-        MPI_Barrier(MPI_COMM_WORLD);
-    }
+    // // For debug
+    // for (int proc=0; proc<size; proc++) {
+    //     if (rank == proc) {
+    //         std::cout << "=========================" << std::endl; 
+    //         std::cout << "Print Graph in process " << proc << std::endl;
+    //         printGraph(graph);
+    //         std::cout << "=========================" << std::endl; 
+    //     }
+    //     MPI_Barrier(MPI_COMM_WORLD);
+    // }
 
     /* color graph in parallel */
     coloring_stats_t stats;
@@ -148,26 +148,26 @@ graph_t *getGraph(std::string const& filename) {
         params_t *params = new params_t ;
 
         idx_t starting_index = simpleReadGraph(filename.c_str(), graph);
-        std::cout << "Starting index" << starting_index << "\tSize" << size << std::endl;
+        // std::cout << "Starting index" << starting_index << "\tSize" << size << std::endl;
 
         setParams(params, graph, size);
-        GPPrintInfo(params, graph);
+        // GPPrintInfo(params, graph);
         idx_t options[METIS_NOPTIONS];
         prepareForPartition(options, params, starting_index);
 
         idx_t objval;
         idx_t *part = new idx_t[graph->nvtxs];
         int status = 0;
-        getchar();
+        // getchar();
         status = METIS_PartGraphKway(&graph->nvtxs, &graph->ncon, graph->xadj, 
                 graph->adjncy, graph->vwgt, graph->vsize, graph->adjwgt, 
                 &params->nparts, params->tpwgts, params->ubvec, options, 
                 &objval, part);
         for (idx_t i=0; i<graph->nvtxs; i++){
             part[i] -= starting_index;
-            std::cout << "Node:" << i << "\tPart:" << part[i] << std::endl; 
+        //     std::cout << "Node:" << i << "\tPart:" << part[i] << std::endl; 
         }
-        getchar();
+        // getchar();
         // broadcast
         // set up a mapping from global_idx to (rank, local_idx)
         std::map<idx_t, std::pair<idx_t, idx_t> > g_to_l;
@@ -390,18 +390,18 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
             idx_t *send_buf = new idx_t[3 * num_external_edges];
             int counter = 0;
         
-            std::cout << "loop " << loop << " [" << rank << "] boundary colors = ";
-            for (auto const& b : boundaryColors) {
-                std::cout << b << " ";
-            }
-            std::cout << std::endl;
+            // std::cout << "loop " << loop << " [" << rank << "] boundary colors = ";
+            // for (auto const& b : boundaryColors) {
+            //     std::cout << b << " ";
+            // }
+            // std::cout << std::endl;
 
             // Supersteps -- color each subset of U
             for (size_t k = 0; k < Us.size(); k++) {     // (8)
                 std::copy(graph->vwgt + 0, graph->vwgt + graph->nvtxs, previousColors.begin());
                 colorGraphSerial(Us.at(k), graph, boundaryColors); // (9-10)
                 //colorGraphSerialTest(Us.at(k), graph, loop, rank); // (9-10)
-                    printf("Here %d\n", k);
+                    // printf("Here %d\n", k);
                 
                 for (idx_t i : Us.at(k)) {  // (11-12)
                     idx_t myColor = graph->vwgt[i];
@@ -418,7 +418,7 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
                             MPI_Request recvRequest, sendRequest;
                             MPI_Isend(&(send_buf[counter]), 3, MPI_INT, neighborRank, 0, MPI_COMM_WORLD, &sendRequest);
 
-                            printf("loop %d [%d] sent (%d, %d, %d) to %d\n", loop, rank, i, myColor, neighborIdx, neighborRank);
+                            // printf("loop %d [%d] sent (%d, %d, %d) to %d\n", loop, rank, i, myColor, neighborIdx, neighborRank);
                             fflush(stdout);
                             
                             MPI_Irecv(&(recv_buf[counter]), 3, MPI_INT, neighborRank, 0, MPI_COMM_WORLD, &recvRequest);
@@ -429,14 +429,16 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
                     }
                 }
             }   // end of superstep
-                
+            std::cout << "Before waitall" << std::endl;
+            std::cout << "Rank " << rank << " size " << requests.size() << std::endl;
             MPI_Waitall(requests.size(), requests.data(), MPI_STATUS_IGNORE);
+            std::cout << "After waitall" << std::endl;
             for (size_t i = 0; i < 3 * requests.size(); i = i + 3) {
                 idx_t neighborIdx = recv_buf[i];
                 idx_t neighborColor = recv_buf[i + 1];
                 idx_t myIdx = recv_buf[i + 2]; 
 
-                printf("loop %d [%d] received (%d, %d, %d)\n", loop, rank, neighborIdx, neighborColor, myIdx);
+                // printf("loop %d [%d] received (%d, %d, %d)\n", loop, rank, neighborIdx, neighborColor, myIdx);
 
                 for (int j = graph->xadj[myIdx]; j < graph->xadj[myIdx+1]; j++) {
                     if (neighborIdx == graph->adjncy[j]) {
@@ -472,17 +474,17 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
             }
             //U = R;
             U.assign(R.begin(), R.end());
-            std::cout << "loop " << loop << " Color of rank [" << rank << "] = [";
-            for (idx_t i = 0; i < graph->nvtxs; i++) {
-                std::cout << graph->vwgt[i] << " ";
-            }
-            std::cout << "]" << std::endl;
+            // std::cout << "loop " << loop << " Color of rank [" << rank << "] = [";
+            // for (idx_t i = 0; i < graph->nvtxs; i++) {
+            //     std::cout << graph->vwgt[i] << " ";
+            // }
+            // std::cout << "]" << std::endl;
 
-            std::cout << "loop " << loop << " R of rank [" << rank << "] = [";
-            for (idx_t i : R) {
-                std::cout << i << " ";
-            }
-            std::cout << "]" << std::endl;
+            // std::cout << "loop " << loop << " R of rank [" << rank << "] = [";
+            // for (idx_t i : R) {
+            //     std::cout << i << " ";
+            // }
+            // std::cout << "]" << std::endl;
         }   // end of "if U is not empty"
 
         size_U = U.size();
@@ -490,7 +492,7 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
 
         fflush(stdout);
         if (rank == 0) {    
-            std::cout << "\n\nEND OF WHILE\n\n";
+            // std::cout << "\n\nEND OF WHILE\n\n";
             fflush(stdout);
         }
         loop++;
