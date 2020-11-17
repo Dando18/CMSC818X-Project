@@ -10,7 +10,7 @@ To install metis, simply
 ./INSTALL_METIS.sh
 ```
 
-Now run `make` in the `src` directory to build the project code into `./bin`.
+Run `make` in the `src` directory to build the project code into `./bin`.
 
 
 ### Running
