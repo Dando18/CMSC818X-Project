@@ -36,7 +36,7 @@ struct coloring_stats_t {
 };
 
 /* forward declare functions */
-graph_t *getGraph(std::string const& filename);
+graph_t *getGraph(std::string const& filename, int seed);
 graph_t *tmpGetGraph();
 graph_t *tmpGetBipartieGraph();
 void deleteGraph(graph_t *graph);
@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
     /* check args to prevent undefined abortion */
     if (argc < 3){
         std::cout << "Usage:" << argv[0]  
-                  << " [graph filename] [chunkSize]" << std::endl;
+                  << " [graph filename] [chunkSize] [seed]" << std::endl;
                 //   << " [graph filename]" << std::endl;
         // MPI_Abort(MPI_COMM_WORLD, 1);
     }
@@ -71,11 +71,15 @@ int main(int argc, char **argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     /* read in args */
+    int seed = -1;
     std::string fileName = std::string(argv[1]);
     std::size_t chunkSize = std::stoul(argv[2]);
+    if (argc == 4) {
+        seed = std::stoi(argv[3]);
+    }
 
     /* Read in graph structure and partition */
-    graph_t *graph = getGraph(fileName);
+    graph_t *graph = getGraph(fileName, seed);
     // graph_t *graph = tmpGetBipartieGraph();
     graph->vwgt = new idx_t[graph->nvtxs];
     std::fill(graph->vwgt + 0, graph->vwgt + graph->nvtxs, -1);
@@ -136,7 +140,7 @@ int main(int argc, char **argv) {
  * @param[in] filename the file to read graph from
  * @return returns a pointer to a graph_t struct with the partitioned graph on this rank
  */
-graph_t *getGraph(std::string const& filename) {
+graph_t *getGraph(std::string const& filename, int seed) {
 
     /* [TODO] -- use ReadGraph and partition with MPI
                  or use ParMETIS */
@@ -155,6 +159,7 @@ graph_t *getGraph(std::string const& filename) {
         idx_t starting_index = simpleReadGraph(filename.c_str(), graph);
         
         setParams(params, graph, size);
+        params->seed = seed;
         GPPrintInfo(params, graph);
         idx_t options[METIS_NOPTIONS];
         prepareForPartition(options, params, starting_index);
@@ -172,7 +177,7 @@ graph_t *getGraph(std::string const& filename) {
             case METIS_OK: std::cout << "METIS_OK" << std::endl; break;
             case METIS_ERROR_INPUT: std::cout << "METIS_ERROR_INPUT" << std::endl; break;
             case METIS_ERROR_MEMORY: std::cout << "METIS_ERROR_MEMORY" << std::endl; break;
-            case METIS_ERROR: std::cout << "METIS_ERROR" << std::endl; break;
+           case METIS_ERROR: std::cout << "METIS_ERROR" << std::endl; break;
         }
 
         std::cout << "params->nparts = " << params->nparts << std::endl;
