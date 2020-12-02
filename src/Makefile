@@ -3,7 +3,7 @@ CXX = g++
 MPICC = mpicxx
 WARNINGS = -w # -Wall -pedantic -Wno-unused-variable -g
 STD = -std=c++11
-OPT = -O0 -g
+OPT = -O3
 FLAGS = $(WARNINGS) $(STD) $(OPT)
 
 METISLIB_INC = -I../metis-5.1.0/programs -I../metis-5.1.0/libmetis/ -I../metis-5.1.0/GKlib -I../metis-5.1.0/include
