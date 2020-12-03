@@ -467,7 +467,7 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
 
             // Communicate with other processors
             // 1. find all boundary vertices
-            std::vector<MPI_Request> requests;
+            std::vector<MPI_Request> recvRequests, sendRequests;
             std::vector<int> recvRanks;
             int num_external_edges = 0;
             
@@ -475,7 +475,8 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
             for (idx_t i = 0; i < graph->nedges; i++) {
                 num_external_edges += (graph->adjwgt[i] != rank) ? 1 : 0;
             }
-            requests.reserve(num_external_edges);
+            recvRequests.reserve(num_external_edges);
+            sendRequests.reserve(num_external_edges);
             recvRanks.reserve(num_external_edges);
 
             idx_t *recv_buf = new idx_t[3 * num_external_edges];
@@ -502,9 +503,10 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
                         
                             MPI_Request recvRequest, sendRequest;
                             MPI_Isend(&(send_buf[counter]), 3, MPI_INT, neighborRank, 0, MPI_COMM_WORLD, &sendRequest);
+                            sendRequests.push_back(sendRequest);
                             
                             MPI_Irecv(&(recv_buf[counter]), 3, MPI_INT, neighborRank, 0, MPI_COMM_WORLD, &recvRequest);
-                            requests.push_back(recvRequest);
+                            recvRequests.push_back(recvRequest);
                             recvRanks.push_back(neighborRank);
                             counter += 3;
                         }
@@ -513,9 +515,10 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
                 }
             }   // end of superstep
             
-            MPI_Waitall(requests.size(), requests.data(), MPI_STATUS_IGNORE);
+            MPI_Waitall(sendRequests.size(), sendRequests.data(), MPI_STATUS_IGNORE);
+            MPI_Waitall(recvRequests.size(), recvRequests.data(), MPI_STATUS_IGNORE);
 
-            for (size_t i = 0; i < 3 * requests.size(); i = i + 3) {
+            for (size_t i = 0; i < 3 * recvRequests.size(); i = i + 3) {
                 idx_t neighborIdx = recv_buf[i];
                 idx_t neighborColor = recv_buf[i + 1];
                 idx_t myIdx = recv_buf[i + 2];
