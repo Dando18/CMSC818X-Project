@@ -469,7 +469,6 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
             // 1. find all boundary vertices
             std::vector<MPI_Request> requests;
             std::vector<int> recvRanks;
-            std::vector<int> sendCounts(4, 0), recvCounts(4, 0);
             int num_external_edges = 0;
             
             // count all of graph->adjwgt != rank
@@ -503,12 +502,10 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
                         
                             MPI_Request recvRequest, sendRequest;
                             MPI_Isend(&(send_buf[counter]), 3, MPI_INT, neighborRank, 0, MPI_COMM_WORLD, &sendRequest);
-                            sendCounts.at(neighborRank) += 1;
                             
                             MPI_Irecv(&(recv_buf[counter]), 3, MPI_INT, neighborRank, 0, MPI_COMM_WORLD, &recvRequest);
                             requests.push_back(recvRequest);
                             recvRanks.push_back(neighborRank);
-                            recvCounts.at(neighborRank) += 1;
                             counter += 3;
                         }
                         
