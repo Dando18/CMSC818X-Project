@@ -21,7 +21,8 @@
 #include <map>
 #include <algorithm>
 #include <cstdio>
-#include <math.h>
+#include <cmath>
+#include <cassert>
 
 // 3rd party libs
 #include "mpi.h"
@@ -61,8 +62,6 @@ int main(int argc, char **argv) {
     if (argc < 3){
         std::cout << "Usage:" << argv[0]  
                   << " [graph filename] [chunkSize] [seed]" << std::endl;
-                //   << " [graph filename]" << std::endl;
-        // MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
     /* primitive MPI info */
@@ -84,24 +83,19 @@ int main(int argc, char **argv) {
     graph->vwgt = new idx_t[graph->nvtxs];
     std::fill(graph->vwgt + 0, graph->vwgt + graph->nvtxs, -1);
 
-    std::cout << "[" << rank << "] getGraph done!" << std::endl;
-
-    // For debug
-    /*for (int proc=0; proc<size; proc++) {
-        if (rank == proc) {
-            std::cout << "=========================" << std::endl; 
-            std::cout << "Print Graph in process " << proc << std::endl;
-            printGraph(graph);
-            std::cout << "=========================" << std::endl; 
-        }
-        MPI_Barrier(MPI_COMM_WORLD);
-    }*/
     MPI_Barrier(MPI_COMM_WORLD);
 
     /* color graph in parallel */
     coloring_stats_t stats;
     double start = MPI_Wtime();
-    colorGraph(graph, chunkSize, stats);
+    if (size == 1) {
+        std::vector<int> U (graph->nvtxs);
+        std::iota(U.begin(), U.end(), 0);
+        colorGraphSerial(U, graph, {});
+        stats.numIterations = 1;
+    } else {
+        colorGraph(graph, chunkSize, stats);
+    }
     double end = MPI_Wtime();
 
     /* output coloring to file or stdout */ 
@@ -157,6 +151,18 @@ graph_t *getGraph(std::string const& filename, int seed) {
         params_t *params = new params_t ;
 
         idx_t starting_index = simpleReadGraph(filename.c_str(), graph);
+
+        if (size == 1) {
+            delete graph_local;
+            delete params;
+
+            std::fill(graph->adjwgt + 0, graph->adjwgt + graph->nedges, 0);
+            // re-index adjncy
+            for (int i = 0; i < graph->nedges; i++) {
+                graph->adjncy[i] -= starting_index;
+            }
+            return graph;
+        }
         
         setParams(params, graph, size);
         params->seed = seed;
@@ -177,7 +183,7 @@ graph_t *getGraph(std::string const& filename, int seed) {
             case METIS_OK: std::cout << "METIS_OK" << std::endl; break;
             case METIS_ERROR_INPUT: std::cout << "METIS_ERROR_INPUT" << std::endl; break;
             case METIS_ERROR_MEMORY: std::cout << "METIS_ERROR_MEMORY" << std::endl; break;
-           case METIS_ERROR: std::cout << "METIS_ERROR" << std::endl; break;
+            case METIS_ERROR: std::cout << "METIS_ERROR" << std::endl; break;
         }
 
         std::cout << "params->nparts = " << params->nparts << std::endl;
@@ -202,10 +208,6 @@ graph_t *getGraph(std::string const& filename, int seed) {
         for (idx_t i=0; i<graph->nvtxs; i++) {
             g_to_l.insert(std::make_pair(i, std::make_pair(part[i], local_num.at(part[i])++)));
         }
-        // for (auto x:g_to_l) {
-        //     std::cout << x.first << " (" << x.second.first 
-        //         << ", " << x.second.second << ")" << std::endl; 
-        // }   
 
         graph_t **graph_local_all = new graph_t* [size];
         for (int i=0; i<size; i++) graph_local_all[i] = new graph_t;
@@ -214,14 +216,6 @@ graph_t *getGraph(std::string const& filename, int seed) {
         std::vector<std::vector<idx_t>> adjwgt_all(size);
         std::vector<std::vector<idx_t>> xadj_all(size);
         for (int i=0; i<size; i++) xadj_all.at(i).push_back(0);
-        // std::cout << "1 :" << adjncy_all.size() << std::endl;
-        // std::cout << "2 :" << adjwgt_all.size() << std::endl;
-
-        // for (int i=0; i<10000; i++) {
-        //     adjncy_all[0].push_back(i); 
-        //     adjwgt_all[0].push_back(i); 
-        //     std::cout << i << "??" << std::endl;
-        // }
         for (int proc=0; proc<size; proc++)
             graph_local_all[proc]->nvtxs = local_num[proc];
         for (int i=0; i<graph->nvtxs; i++)
@@ -232,18 +226,10 @@ graph_t *getGraph(std::string const& filename, int seed) {
                      edg_idx++)
             {
                 idx_t edg = graph->adjncy[edg_idx] - starting_index;
-                // std::cout << "Edge: " << edg << "local:(" <<g_to_l[edg].first << "," 
-                //     << g_to_l[edg].second << ")" <<  std::endl;
-                // std::cout << "edg_idx " << g_to_l[edg].second << " "  << lrank << std::endl;
-                // std::cout << adjncy_all[lrank].size() << "!" <<  adjwgt_all[lrank].size() << "!" << std::endl;
-                // std::cout <<  g_to_l[edg].first << "!!" << g_to_l[edg].second << "!!" << std::endl;
                 adjncy_all[lrank].push_back(g_to_l.at(edg).second);
-                // std::cout << "Here" << std::endl;
                 adjwgt_all[lrank].push_back(g_to_l.at(edg).first);
             
             }
-            // std::cout << "Here Outside : " << adjncy_all[lrank].size() << std::endl;
-            // std::cout << "xadj_all" << xadj_all[lrank][0] << std::endl;
             xadj_all.at(lrank).push_back(adjncy_all.at(lrank).size());
         }
         for (int proc=0; proc<size; proc++)
@@ -502,7 +488,6 @@ void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out) {
             for (size_t k = 0; k < Us.size(); k++) {     // (8)
                 std::copy(graph->vwgt + 0, graph->vwgt + graph->nvtxs, previousColors.begin());
                 colorGraphSerial(Us.at(k), graph, boundaryColors); // (9-10)
-                //colorGraphSerialTest(Us.at(k), graph, loop, rank); // (9-10)
                 
                 for (idx_t i : Us.at(k)) {  // (11-12)
                     idx_t myColor = graph->vwgt[i];
@@ -604,15 +589,16 @@ void colorGraphSerial(std::vector<idx_t> const& U, graph_t *graph, std::vector<i
             idx_t neighbor = graph->adjncy[j];
             idx_t neighborRank = graph->adjwgt[j];
             if (neighborRank == rank) {
-                if (graph->vwgt[neighbor] != -1)
+                if (graph->vwgt[neighbor] != -1) { 
                     neighbor_colors.at(graph->vwgt[neighbor]) = true; // this color is used
+                }
             } else if (boundaryColors.at(j) != -1) {
                 idx_t neighborColor = boundaryColors.at(j);
                 neighbor_colors.at(neighborColor) = true; // this color is used
             }
         }
         for (std::size_t j = 0; j < MAX_COLOR; j++) {
-            if (!neighbor_colors[j]) { // first color not used
+            if (!neighbor_colors.at(j)) { // first color not used
                 graph->vwgt[vertex] = j;
                 break;
             }
@@ -683,7 +669,6 @@ void outputColoring(graph_t *graph, std::ostream &out) {
 
 
 // Graph partitioning stuff
-
 idx_t simpleReadGraph(std::string filename, graph_t *graph)
 {
     std::ifstream infile(filename);
@@ -719,26 +704,17 @@ idx_t simpleReadGraph(std::string filename, graph_t *graph)
     graph->xadj = new idx_t [xadj.size()];
     std::copy(xadj.begin(), xadj.end(), graph->xadj);
 
-    // for (int i=0; i<xadj.size(); i++)
-    //     std::cout << graph->xadj[i] << " ";
-    // std::cout << std::endl;
-
-    // for (int i=0; i<adjncy.size(); i++)
-    //     std::cout << graph->adjncy[i] << " ";
-    // std::cout << std::endl;
-    
-    // graph->adjncy = new idx_t[NEDGES] {1, 2, 0, 2, 0, 1, 3, 2, 4, 5, 3, 5, 3, 4};
-    // graph->xadj = new idx_t[NVERTS+1] {0, 2, 4, 7, 10, 12, 14};
+    // Double the number of edges
+    graph->nedges *= 2;
 
     // Setting those unrelated stuff
     graph->vwgt = new idx_t[NVERTS];
     std::fill(graph->vwgt + 0, graph->vwgt + NVERTS, 1);
-    graph->adjwgt = new idx_t[NEDGES];
-    std::fill(graph->adjwgt + 0, graph->adjwgt + NVERTS, 1);
+    graph->adjwgt = new idx_t[graph->nedges];
+    std::fill(graph->adjwgt + 0, graph->adjwgt + graph->nedges, 1);
 
     graph->vsize = new idx_t[NVERTS];
     
-    // graph->adjwgt = new idx_t[NEDGES] {0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2};
     graph->ncon = 1;
     return starting_idx;
 }
