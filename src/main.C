@@ -40,6 +40,7 @@ struct coloring_stats_t {
 graph_t *getGraph(std::string const& filename, int seed);
 graph_t *tmpGetGraph();
 graph_t *tmpGetBipartieGraph();
+graph_t *getRandomGraph(size_t vertsPerProcess, size_t maxDegree, size_t numBoundaries);
 void deleteGraph(graph_t *graph);
 void colorGraph(graph_t *graph, std::size_t s, coloring_stats_t &out);
 void colorGraphSerial(std::vector<idx_t> const& U, graph_t *graph, std::vector<idx_t> const& boundaryColors);
@@ -60,8 +61,9 @@ int main(int argc, char **argv) {
 
     /* check args to prevent undefined abortion */
     if (argc < 3){
-        std::cout << "Usage:" << argv[0]  
-                  << " [graph filename] [chunkSize] [seed]" << std::endl;
+        std::cout << "Usage: \t" << argv[0]  
+                  << " [graph filename] [chunkSize] [seed]\n" 
+                  << "or if filename='-'\t" << argv[0] << " - [chunkSize] [vertsPerProcess] [maxDegree] [connectivity]\n" << std::endl;
     }
 
     /* primitive MPI info */
@@ -78,11 +80,20 @@ int main(int argc, char **argv) {
     }
 
     /* Read in graph structure and partition */
-    graph_t *graph = getGraph(fileName, seed);
-    // graph_t *graph = tmpGetBipartieGraph();
+    graph_t *graph;
+    if (fileName != "-") {
+        graph = getGraph(fileName, seed);
+        
+    } else {
+        std::size_t vertsPerProcess = (argc >= 4) ? std::stoul(argv[3]) : 1000;
+        std::size_t maxDegree = (argc >= 5) ? std::stoul(argv[4]) : 50;
+        double connectivity = (argc >= 6) ? std::stod(argv[5]) : 0.1;
+        assert( connectivity > 0.0 && connectivity <= 1.0 );
+        graph = getRandomGraph(vertsPerProcess, maxDegree, static_cast<size_t>(vertsPerProcess*size*connectivity*0.9));
+    }
     graph->vwgt = new idx_t[graph->nvtxs];
     std::fill(graph->vwgt + 0, graph->vwgt + graph->nvtxs, -1);
-
+    
     MPI_Barrier(MPI_COMM_WORLD);
 
     /* color graph in parallel */
@@ -306,6 +317,94 @@ graph_t *getGraph(std::string const& filename, int seed) {
     return static_cast<graph_t *>(graph_local);
 }
 
+
+/**
+ * @param[in] vertsPerProcess the number of vertices to put on each process
+ * @param[in] numBoundaries the number of external edges per rank ~ ish
+ */
+graph_t *getRandomGraph(size_t vertsPerProcess, size_t maxDegree, size_t numBoundaries) {
+    int rank, size;
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    int *buf = new int[numBoundaries*4];
+
+    if (rank == 0) {
+        /* Build table */
+        std::set<std::tuple<int, int, int, int>> unique;
+        while (unique.size() < numBoundaries) {
+            int rank1 = rand() % size;
+            int rank2;
+            do { rank2 = rand() % size; } while (rank2 == rank1 && size != 1);
+            int vertex1 = rand() % vertsPerProcess, vertex2 = rand() % vertsPerProcess;
+
+            unique.insert(std::make_tuple(rank1, vertex1, rank2, vertex2));
+        }
+
+        int i = 0;
+        for (std::tuple<int, int, int, int> const& vals : unique) {
+            int r1, v1, r2, v2;
+            std::tie(r1, v1, r2, v2) = vals;
+            buf[i]=r1; buf[i+1]=v1; buf[i+2]=r2; buf[i+3]=v2;
+
+            i += 4;
+        }
+    }
+
+    /* distributed table */
+    MPI_Bcast(buf, numBoundaries*4, MPI_INT, 0, MPI_COMM_WORLD);
+
+    /* build graph locally on each rank */
+    graph_t *graph = new graph_t;
+    graph->nvtxs = vertsPerProcess;
+    //graph->vwgt = new idx_t[vertsPerProcess];
+    
+    std::vector<std::vector<idx_t>> adjList(graph->nvtxs);
+    std::vector<std::vector<idx_t>> adjListRanks(graph->nvtxs);
+    for (size_t i = 0; i < numBoundaries*4; i += 4) {
+        int rank1 = buf[i+0], v1 = buf[i+1], rank2 = buf[i+2], v2 = buf[i+3];
+
+        if (rank1 == rank) {
+            adjList.at(v1).push_back(v2);
+            adjListRanks.at(v1).push_back(rank2);
+        } else if (rank2 == rank) {
+            adjList.at(v2).push_back(v1);
+            adjListRanks.at(v2).push_back(rank1);
+        }
+    }
+
+    graph->xadj = new idx_t[vertsPerProcess + 1];
+    graph->xadj[0] = 0;
+    for (int i = 0; i < vertsPerProcess; i++) {
+        int n = adjList.at(i).size() + rand() % (maxDegree - adjList.at(i).size());
+        graph->xadj[i + 1] = graph->xadj[i] + n;
+    }
+
+    for (size_t i = 0; i < adjList.size(); i++) {
+        while (adjList.at(i).size() < graph->xadj[i + 1] - graph->xadj[i]) {
+            int vertex;
+            do { vertex = rand() % vertsPerProcess; } while (vertex == i);
+
+            adjList.at(i).push_back(vertex);
+            adjListRanks.at(i).push_back(rank);
+        }
+    }
+
+    
+
+    graph->nedges = graph->xadj[vertsPerProcess];
+    graph->adjncy = new idx_t[graph->nedges];
+    graph->adjwgt = new idx_t[graph->nedges];
+    for (int i = 0; i < vertsPerProcess; i++) {
+        for (int j = graph->xadj[i]; j < graph->xadj[i + 1]; j++) {
+            graph->adjncy[j] = adjList.at(i).at(j - graph->xadj[i]);
+            graph->adjwgt[j] = adjListRanks.at(i).at(j - graph->xadj[i]);
+        }
+    }
+
+    delete[] buf;
+    return graph;
+}
 
 /** For testing until graph partitioning part is done.
  *  @returns a graph_t object
