@@ -33,3 +33,10 @@ Colors Used:      7
 Num Iterations    4
 ```
 
+You can run with a randomly generated graph using '-' as the filename. The the next parameters are s, the # of vertices per rank, max degree, and connectivity. 
+
+```bash
+mpirun -np 16 ./bin/run - 100 1000000 500 0.2
+```
+
+The above will generate a random graph with 1E6 vertices per rank. Each vertex will have a max possible of 500 edges. The connectivity, 0.2, is a number signifying roughly how many edges between ranks there will be. Closer to 0.0 is almost no inter-process edges and close to 1.0 is a lot of inter-process edges. Values between 0.1 and 0.3 are close to how metis would partition. Then the above algorithm is run with s=100 on 16 processes.
